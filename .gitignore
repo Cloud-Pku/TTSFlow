@@ -1,0 +1,10 @@
+datasets
+external_datasets
+__pycache__
+.mfa
+wandb
+output
+ref_wav
+.ipynb_checkpoints
+.env
+.wav
