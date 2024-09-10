@@ -31,7 +31,7 @@ from training.dataset import load_distorted_loader, load_clean_loader
 
 # Train parameters
 train_experiment = "large-03"
-train_project="supervoice-flow"
+train_project="supervoice-flow-novocoder-multigpu"
 train_datasets = "/mnt/afs/chenyun/TTSFlow/ref_wav"
 train_eval_datasets = "/mnt/afs/chenyun/TTSFlow/ref_wav"
 train_duration = 15 # seconds, 15s x 5 (batches) = 75s per GPU
@@ -61,7 +61,7 @@ def main():
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     accelerator = Accelerator(log_with="wandb", kwargs_handlers=[ddp_kwargs], gradient_accumulation_steps = train_grad_accum_every, mixed_precision=train_mixed_precision)
     device = accelerator.device
-    output_dir = Path("./output")
+    output_dir = Path("/mnt/afs/chenyun/TTSFlow/output_accelerate")
     output_dir.mkdir(parents=True, exist_ok=True)
     dtype = torch.float16 if train_mixed_precision == "fp16" else (torch.bfloat16 if train_mixed_precision == "bf16" else torch.float32)
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -140,6 +140,7 @@ def main():
 
     if train_auto_resume and source is not None:
         accelerator.print("Resuming training...")
+        print(str(output_dir / f"{source}.pt"))
         checkpoint = torch.load(str(output_dir / f"{source}.pt"), map_location="cpu")
 
         # Model

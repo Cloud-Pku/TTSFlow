@@ -85,7 +85,7 @@ frozendict==2.4.4
 frozenlist==1.4.0
 fsspec==2023.6.0
 ftfy==6.2.3
--e git+https://github.com/alibaba/FunASR.git@e8f535f53320780cd8ed6f3b8588b187935d3ae5#egg=funasr
+# -e git+https://github.com/alibaba/FunASR.git@e8f535f53320780cd8ed6f3b8588b187935d3ae5#egg=funasr
 future==1.0.0
 g2p-en==2.1.0
 gast==0.4.0
@@ -97,7 +97,7 @@ google-auth-oauthlib==1.0.0
 google-pasta==0.2.0
 gradio==4.19.0
 gradio_client==0.10.0
-gravdataset @ https://aids-download.aoss.cn-sh-01.sensecoreapi-oss.cn/packages/pypi/gravdataset.tar.gz#sha256=d411477403e1b806991c3b75304d8e752b617f780716504967c8fd53265559a2
+# gravdataset @ https://aids-download.aoss.cn-sh-01.sensecoreapi-oss.cn/packages/pypi/gravdataset.tar.gz#sha256=d411477403e1b806991c3b75304d8e752b617f780716504967c8fd53265559a2
 greenlet==3.0.3
 grpcio==1.56.2
 h11==0.14.0
@@ -340,7 +340,7 @@ urllib3==1.26.16
 uvicorn==0.30.6
 vector-quantize-pytorch==1.16.1
 vocos==0.1.0
--e git+https://github.com/lucidrains/voicebox-pytorch.git@c05a4d0c69920993b47069e22223677174d873e4#egg=voicebox_pytorch
+# -e git+https://github.com/lucidrains/voicebox-pytorch.git@c05a4d0c69920993b47069e22223677174d873e4#egg=voicebox_pytorch
 wandb==0.15.4
 wcwidth==0.2.13
 websockets==11.0.3

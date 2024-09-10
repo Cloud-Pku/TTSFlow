@@ -3,8 +3,17 @@ external_datasets
 __pycache__
 .mfa
 wandb
+dataset
 output
+output1
+output2
+output_accelerate
+tinydata
+ref_wav_tiny
 ref_wav
 .ipynb_checkpoints
 .env
 .wav
+.pt
+.zip
+.log
