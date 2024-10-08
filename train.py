@@ -11,8 +11,6 @@ import time
 from contextlib import nullcontext
 import shutil
 from pathlib import Path
-import math
-import random
 from tqdm import tqdm
 
 # ML
@@ -31,9 +29,9 @@ from training.dataset import load_distorted_loader, load_clean_loader
 
 # Train parameters
 train_experiment = "large-03"
-train_project="supervoice-flow-novocoder-multigpu"
-train_datasets = "/mnt/afs/chenyun/TTSFlow/ref_wav"
-train_eval_datasets = "/mnt/afs/chenyun/TTSFlow/ref_wav"
+train_project="supervoice-flow-multigpu"
+train_datasets = "/mnt/afs/chenyun/TTSFlow/cycle_dataset/tmp_dataset"
+train_eval_datasets = "/mnt/afs/chenyun/TTSFlow/cycle_dataset/tmp_dataset"
 train_duration = 15 # seconds, 15s x 5 (batches) = 75s per GPU
 train_source_experiment = None
 train_auto_resume = True
@@ -47,9 +45,10 @@ train_save_every = 1000
 train_watch_every = 1000
 train_evaluate_every = 1
 train_evaluate_batch_size = 10
-train_lr_start = 1e-7
-train_lr_max = 2e-5
-train_warmup_steps = 5000
+train_lr_start = 5e-5
+train_lr_max = 1e-5
+train_decay_steps = 100000
+train_warmup_steps = 500000
 train_mixed_precision = "fp16" # "bf16" or "fp16" or None
 train_clip_grad_norm = 0.2
 train_sigma = 1e-5
@@ -61,7 +60,7 @@ def main():
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     accelerator = Accelerator(log_with="wandb", kwargs_handlers=[ddp_kwargs], gradient_accumulation_steps = train_grad_accum_every, mixed_precision=train_mixed_precision)
     device = accelerator.device
-    output_dir = Path("/mnt/afs/chenyun/TTSFlow/output_accelerate")
+    output_dir = Path("/mnt/afs/chenyun/TTSFlow/output_wenet")
     output_dir.mkdir(parents=True, exist_ok=True)
     dtype = torch.float16 if train_mixed_precision == "fp16" else (torch.bfloat16 if train_mixed_precision == "bf16" else torch.float32)
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -94,8 +93,8 @@ def main():
     # Accelerate
     model, optim, train_loader, test_loader = accelerator.prepare(model, optim, train_loader, test_loader)
     train_cycle = cycle(train_loader)
-    test_cycle = cycle(test_loader)
-    test_batch = next(test_cycle)
+    # test_cycle = cycle(test_loader)
+    # test_batch = next(test_cycle)
     hps = {
         "train_lr_start": train_lr_start, 
         "train_lr_max": train_lr_max, 
@@ -132,7 +131,7 @@ def main():
         shutil.copyfile(fname_step, fname)
 
     # Load
-    source = None
+    source = 'large-03.48000'
     if (output_dir / f"{train_experiment}.pt").exists():
         source = train_experiment
     elif train_source_experiment and (output_dir / f"{train_source_experiment}.pt").exists():
@@ -147,8 +146,8 @@ def main():
         raw_model.load_state_dict(checkpoint['model'])
 
         # Optimizer
-        optim.load_state_dict(checkpoint['optimizer'])
-        scheduler.load_state_dict(checkpoint['scheduler'])
+        # optim.load_state_dict(checkpoint['optimizer'])
+        # scheduler.load_state_dict(checkpoint['scheduler'])
         step = checkpoint['step']
 
         accelerator.print(f'Loaded at #{step}')
@@ -158,12 +157,21 @@ def main():
     def train_step():
         model.train()
 
+        # # Update LR
+        # if step < train_warmup_steps:
+        #     lr = (lr_start + ((lr_max - lr_start) * step) / train_warmup_steps)
+        #     for param_group in optim.param_groups:
+        #         param_group['lr'] = lr
+        #     lr = lr / accelerator.num_processes
+        # else:
+        #     scheduler.step()
+        #     lr = scheduler.get_last_lr()[0] / accelerator.num_processes
         # Update LR
         if step < train_warmup_steps:
-            lr = (lr_start + ((lr_max - lr_start) * step) / train_warmup_steps)
-            for param_group in optim.param_groups:
-                param_group['lr'] = lr
-            lr = lr / accelerator.num_processes
+            lr = train_lr_start
+        elif step < train_warmup_steps + train_decay_steps:
+            decay_step = step - train_warmup_steps
+            lr = train_lr_start - (train_lr_start - train_lr_max) * (decay_step / train_decay_steps)
         else:
             scheduler.step()
             lr = scheduler.get_last_lr()[0] / accelerator.num_processes
@@ -174,15 +182,19 @@ def main():
         while successful_cycles < train_grad_accum_every:
             with accelerator.accumulate(model):
                 with accelerator.autocast():
+                    # total_s_t = time.time()
+                    # s_t = time.time()
                     if train_clean:
                         spec = next(train_cycle)
                     else:
                         spec, spec_aug = next(train_cycle)
-
+                    # e_t = time.time()
+                    # print(f'read data cost {e_t - s_t} sec')
                     # Prepare batch
                     batch_size = spec.shape[0]
                     seq_len = spec.shape[1]
 
+                    # s_t = time.time()
                     # Normalize spectograms
                     spec = (spec - config.audio.norm_mean) / config.audio.norm_std
                     if not train_clean:
@@ -231,14 +243,19 @@ def main():
                         target = flow,
                         mask_loss = True
                     )
+                    # e_t = time.time()
+                    # print(f'forward cost {e_t - s_t} sec')
 
+                    # s_t = time.time()
                     # Backprop
                     optim.zero_grad()
+                    # print(f'RANK:{accelerator.process_index}','LOSS:',loss)
                     accelerator.backward(loss)
                     if accelerator.sync_gradients:
                         accelerator.clip_grad_norm_(model.parameters(), train_clip_grad_norm)
                     optim.step()
-
+                    # e_t = time.time()
+                    # print(f'backward & step cost {e_t - s_t} sec')
                     # Log skipping step
                     if optim.step_was_skipped:
                         failed_steps = failed_steps + 1
@@ -246,11 +263,13 @@ def main():
                             accelerator.print("Step was skipped with NaN loss")
                         else:
                             accelerator.print("Step was skipped")
-                        if failed_steps > 20:
+                        if failed_steps > 80:
                             raise Exception("Too many failed steps")
                     else:
                         successful_cycles = successful_cycles + 1
                         failed_steps = 0
+                    # total_e_t = time.time()
+                    # print(f'1 iter cost {total_e_t - total_s_t} sec')
 
         return loss, predicted, flow, lr
 
@@ -276,7 +295,7 @@ def main():
         start = time.time()
         loss, predicted, flow, lr = train_step()
         end = time.time()
-
+        # print(f'time={end - start} sec')
         # Advance
         step = step + 1
 

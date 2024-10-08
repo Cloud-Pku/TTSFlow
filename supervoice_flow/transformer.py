@@ -156,6 +156,11 @@ class AttentionBlock(torch.nn.Module):
 
         # Dot product attention
         # with torch.backends.cuda.sdp_kernel(enable_mem_efficient=True, enable_math=False): # Math backend is broken on mixed precision
+        if alibi is not None:
+            alibi = alibi.to(q.dtype)
+        # q = q.to(torch.float32)
+        # k = k.to(torch.float32)
+        # v = v.to(torch.float32)
         y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask = alibi if alibi is not None else None, dropout_p=self.att_dropout if self.training else 0.0) # Using ALiBi as a mask
 
         # Reassemble all head outputs side by side

@@ -5,6 +5,20 @@ from supervoice_flow.audio import load_mono_audio, spectogram
 from .audio import do_reverbrate
 from pathlib import Path
 import random
+import os
+import stat
+
+def lock_directory(directory_path):
+    # 获取当前权限
+    current_permissions = os.stat(directory_path).st_mode
+    new_permissions = current_permissions & ~stat.S_IWUSR & ~stat.S_IWGRP & ~stat.S_IWOTH
+    os.chmod(directory_path, new_permissions)
+
+def unlock_directory(directory_path):
+    # 获取当前权限
+    current_permissions = os.stat(directory_path).st_mode
+    new_permissions = current_permissions | stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH
+    os.chmod(directory_path, new_permissions)
 
 def load_clean_sampler(datasets, duration, return_source = False):
 
@@ -24,22 +38,26 @@ def load_clean_sampler(datasets, duration, return_source = False):
     #     dataset_files = [str(p) for p in dataset_files]
     # files += dataset_files
     # print(f"Loaded {len(files)} files")
-    dataset_files = list(Path(datasets).rglob("*.wav"))
-    dataset_files = [str(p) for p in dataset_files]
-    files = dataset_files
+    # dataset_files = list(Path(datasets).rglob("*.wav"))
+    # dataset_files = [str(p) for p in dataset_files]
+    # files = dataset_files
 
     # Sample a single item
     def sample_item():
-
+        # lock_directory(Path(datasets))
+        dataset_files = list(Path(datasets).rglob("*.wav"))
+        dataset_files = [str(p) for p in dataset_files]
+        files = dataset_files
         # Load random audio
         while True:
-            f = random.choice(files)
             try:
+                f = random.choice(files)
                 audio = load_mono_audio(f, config.audio.sample_rate)
                 break
-            except:
-                print(f"Error loading {f}")
-
+            except Exception as e:
+                print(files)
+                print(e)
+        # unlock_directory(Path(datasets))
         # Pad or trim audio
         if audio.shape[0] < frames:
             padding = frames - audio.shape[0]
@@ -85,21 +103,32 @@ def load_effected_sampler(datasets, effect, duration, return_source = False):
     files = dataset_files
     
     # Sample a single item
-    def sample_item():
+    def sample_item(file_idx=None, padding_trim_random = True):
 
         # Load random audio
-        f = random.choice(files)
+        if file_idx == None:
+            f = random.choice(files)
+        else:
+            f = files[file_idx]
         audio = load_mono_audio(f, config.audio.sample_rate)
 
         # Pad or trim audio
-        if audio.shape[0] < frames:
-            padding = frames - audio.shape[0]
-            padding_left = random.randint(0, padding)
-            padding_right = padding - padding_left
-            audio = torch.nn.functional.pad(audio, (padding_left, padding_right), value=0)
+        if padding_trim_random:
+            if audio.shape[0] < frames:
+                padding = frames - audio.shape[0]
+                padding_left = random.randint(0, padding)
+                padding_right = padding - padding_left
+                audio = torch.nn.functional.pad(audio, (padding_left, padding_right), value=0)
+            else:
+                start = random.randint(0, audio.shape[0] - frames)
+                audio = audio[start:start + frames]
         else:
-            start = random.randint(0, audio.shape[0] - frames)
-            audio = audio[start:start + frames]
+            if audio.shape[0] < frames:
+                padding_left = 0
+                padding_right = frames - audio.shape[0]
+                audio = torch.nn.functional.pad(audio, (padding_left, padding_right), value=0)
+            else:
+                audio = audio[:frames]
 
         # Apply effect
         # audio_with_effect = effect(audio)

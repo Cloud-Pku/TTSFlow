@@ -77,38 +77,45 @@ def plot_debug(waveform, file_name, wave=True):
 # Dataset
 #
 
-sampler = load_distorted_sampler("/mnt/afs/chenyun/TTSFlow/ref_wav_tiny", 15, False)
+sampler = load_distorted_sampler("/mnt/afs/chenyun/TTSFlow/ref_wav", 15, False)
 
 # AudioFlow
 predictor = AudioFlow(config)
-checkpoint = torch.load(f'/mnt/afs/chenyun/TTSFlow/output_multinode/large-03.100.pt', map_location="cpu")
-predictor.load_state_dict(checkpoint['model'])
-predictor.to(device)
-print("Flow at ", checkpoint['step'])
+
+
 
 def do_effect(src, steps = 8):
     src = (src - config.audio.norm_mean) / config.audio.norm_std
     pr, _ = predictor.sample(audio = src.to(torch.float32).to(device), steps = steps)
     return ((pr * config.audio.norm_std) + config.audio.norm_mean).to(torch.float32)
 
-spec, audio = sampler()
+spec, audio = sampler(file_idx=0, padding_trim_random=False)
 
-for steps in [4,100,1000]:
-    spec_processed = do_effect(spec, steps = steps)
+from tqdm import tqdm
+ckpt_list = [60000]
+for steps in [4]:
+    for ckpt in tqdm(ckpt_list):
+        checkpoint = torch.load(f'/mnt/afs/chenyun/TTSFlow/output_accelerate/large-03.{ckpt}.pt', map_location="cpu")
+        predictor.load_state_dict(checkpoint['model'])
+        print("Flow at ", checkpoint['step'])
+        predictor.to(device)
+        spec_processed = do_effect(spec, steps = steps)
 
-    # wav_aug_2 = do_vocoder(spec)
-    wav_aug_3 = do_vocoder(spec_processed)
-    plot_debug(wav_aug_3, f'sample_{steps}.png')
-    torchaudio.save(f"sample_{steps}.wav", wav_aug_3.unsqueeze(0), config.audio.sample_rate)
+        # wav_aug_2 = do_vocoder(spec)
+        wav_aug_3 = do_vocoder(spec_processed)
+        plot_debug(wav_aug_3, f'sample_{ckpt}_{steps}.png')
+        torchaudio.save(f"sample_{ckpt}_{steps}.wav", wav_aug_3.unsqueeze(0), config.audio.sample_rate)
 
 
-torchaudio.save("origin.wav", audio.unsqueeze(0), config.audio.sample_rate)
 
-raw_spec_after_vocoder = do_vocoder(spec)
-torchaudio.save("raw_spec_after_vocoder.wav", raw_spec_after_vocoder.unsqueeze(0), config.audio.sample_rate)
 
-plot_debug(audio, 'origin.png')
-plot_debug(spec_processed.detach().transpose(0, 1), 'before_vocoder.png', False)
+# torchaudio.save("origin.wav", audio.unsqueeze(0), config.audio.sample_rate)
+
+# raw_spec_after_vocoder = do_vocoder(spec)
+# torchaudio.save("raw_spec_after_vocoder.wav", raw_spec_after_vocoder.unsqueeze(0), config.audio.sample_rate)
+
+# plot_debug(audio, 'origin.png')
+# plot_debug(spec_processed.detach().transpose(0, 1), 'before_vocoder.png', False)
 
 
 # plot_debug(wav)

@@ -101,8 +101,8 @@ class AudioFlow(torch.nn.Module):
 
             return prediction
 
-
-        trajectory = odeint(solver, noise, times, atol = 1e-5, rtol = 1e-5, method = 'midpoint')
+        with torch.no_grad():
+            trajectory = odeint(solver, noise, times, atol = 1e-5, rtol = 1e-5, method = 'midpoint')
 
         #
         # Output sample and full trajectory
