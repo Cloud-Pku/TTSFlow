@@ -8,6 +8,9 @@ import random
 import os
 import stat
 
+from torchrl.data import ReplayBuffer, ListStorage
+from torchrl.data.replay_buffers.samplers import SamplerWithoutReplacement
+
 def lock_directory(directory_path):
     # 获取当前权限
     current_permissions = os.stat(directory_path).st_mode
@@ -164,7 +167,6 @@ def load_effected_sampler(datasets, effect, duration, return_source = False):
     # Return generator
     return sample_item
 
-
 def load_distorted_sampler(datasets, duration, return_source = False):
 
     # Codecs for distortion
@@ -262,3 +264,70 @@ def load_clean_loader(datasets, duration, batch_size, num_workers, return_source
     loader = torch.utils.data.DataLoader(dataset, batch_size = batch_size, num_workers = num_workers, pin_memory = True, shuffle=False)
 
     return loader
+
+
+def load_audio_data(datasets, duration, batch_size, num_workers, eval=False):
+
+    # Target duration
+    frames = int(duration * config.audio.sample_rate)
+
+    dataset_files = list(Path(datasets).rglob("*.wav"))
+    dataset_files = [str(p) for p in dataset_files]
+
+    def collate_fn(audio_list):
+
+        audio_same_length=[]
+
+        for audio in audio_list:
+            audio = audio.squeeze(0)
+            # Pad or trim audio
+            if audio.shape[0] < frames:
+                padding = frames - audio.shape[0]
+                if eval:
+                    padding_left = 0
+                else:
+                    padding_left = random.randint(0, padding)
+                padding_right = padding - padding_left
+                audio = torch.nn.functional.pad(audio, (padding_left, padding_right), value=0)
+            else:
+                if eval:
+                    start = 0
+                else:
+                    start = random.randint(0, audio.shape[0] - frames)
+                audio = audio[start:start + frames]
+
+            audio_same_length.append(audio)
+
+        audio=torch.stack(audio_same_length)
+
+        # Spectogram
+        spec = spectogram(audio, 
+            n_fft = config.audio.n_fft, 
+            n_mels = config.audio.n_mels, 
+            n_hop = config.audio.hop_size, 
+            n_window = config.audio.win_size,  
+            mel_norm = config.audio.mel_norm, 
+            mel_scale = config.audio.mel_scale, 
+            sample_rate = config.audio.sample_rate
+        ).transpose(1, 2).to(torch.float16)
+
+        return spec
+
+    replay_buffer = ReplayBuffer(
+        storage=ListStorage(max_size=100000000),
+        sampler=SamplerWithoutReplacement(shuffle=False, drop_last=True) if eval else SamplerWithoutReplacement(shuffle=True,drop_last=True),
+        batch_size=batch_size,
+        prefetch=10,
+        collate_fn=collate_fn
+    )
+
+    for f in dataset_files:
+        try:
+            audio = load_mono_audio(f, config.audio.sample_rate)
+        except Exception as e:
+            print(e)
+
+        replay_buffer.extend(audio.unsqueeze(0))
+
+
+    return replay_buffer

@@ -7,6 +7,8 @@ from torchdiffeq import odeint
 from .transformer import Transformer, ConvPositionEmbed
 from .tensors import drop_using_mask, merge_mask
 
+from torch.distributions import Independent, Normal
+
 class AudioFlow(torch.nn.Module):
     def __init__(self, config, *, cache_alibi = False):
         super(AudioFlow, self).__init__()
@@ -109,6 +111,95 @@ class AudioFlow(torch.nn.Module):
         #
 
         return merge_predicted(trajectory[-1]), trajectory
+
+    def logp(self, audio, using_Hutchinson_trace_estimator=True):
+
+        condition_audio = torch.zeros_like(audio)
+        model_drift = lambda t, x: - self.forward(audio = condition_audio, noise = x, times = 1 - t)
+
+        def compute_trace_of_jacobian_general(dx, x):
+            # Assuming x has shape (B, D1, ..., Dn)
+            shape = x.shape[1:]  # get the shape of a single element in the batch
+            outputs = torch.zeros(
+                x.shape[0], device=x.device, dtype=x.dtype
+            )  # trace for each batch
+            # Iterate through each index in the product of dimensions
+            for index in torch.cartesian_prod(*(torch.arange(s) for s in shape)):
+                if len(index.shape) > 0:
+                    index = tuple(index)
+                else:
+                    index = (index,)
+                grad_outputs = torch.zeros_like(x)
+                grad_outputs[(slice(None), *index)] = (
+                    1  # set one at the specific index across all batches
+                )
+                grads = torch.autograd.grad(
+                    outputs=dx, inputs=x, grad_outputs=grad_outputs, retain_graph=True
+                )[0]
+                outputs += grads[(slice(None), *index)]
+            return outputs
+
+        def compute_trace_of_jacobian_by_Hutchinson_Skilling(dx, x, eps):
+            """Create the divergence function of `fn` using the Hutchinson-Skilling trace estimator."""
+
+            fn_eps = torch.sum(dx * eps)
+            grad_fn_eps = torch.autograd.grad(fn_eps, x, create_graph=True)[0]
+            outputs = torch.sum(grad_fn_eps * eps, dim=tuple(range(1, len(x.shape))))
+            return outputs
+
+        def composite_drift(t, x):
+            # where x is actually x0_and_diff_logp, (x0, diff_logp), which is a tuple containing x and logp_xt_minus_logp_x0
+            with torch.set_grad_enabled(True):
+                t = t.detach()
+                x_t = x[0].detach()
+                logp_xt_minus_logp_x0 = x[1]
+
+                x_t.requires_grad = True
+                t.requires_grad = True
+
+                dx = model_drift(t, x_t)
+                if using_Hutchinson_trace_estimator:
+                    noise = torch.randn_like(x_t, device=x_t.device)
+                    logp_drift = -compute_trace_of_jacobian_by_Hutchinson_Skilling(
+                        dx, x_t, noise
+                    )
+                    # logp_drift = - divergence_approx(dx, x_t, noise)
+                else:
+                    logp_drift = -compute_trace_of_jacobian_general(dx, x_t)
+
+                return dx, logp_drift
+
+        # Create time interpolation
+        times = torch.linspace(0.0, 1.0, 100, device = audio.device)
+
+        x0_and_diff_logp = (audio, torch.zeros(audio.shape[0], device=audio.device))
+
+        def forward_ode_drift_by_torchdiffeq(t, x):
+            # broadcasting t to match the batch size of x
+            t = t.repeat(x[0].shape[0])
+            return composite_drift(t, x)
+
+        x1_and_logp1 = odeint(
+                func=forward_ode_drift_by_torchdiffeq,
+                y0=x0_and_diff_logp,
+                t=times,
+                atol = 1e-5, rtol = 1e-5, method = 'midpoint'
+            )
+
+        logp_x1_minus_logp_x0 = x1_and_logp1[1][-1]
+        x1 = x1_and_logp1[0][-1]
+        x1_1d = x1.reshape(x1.shape[0], -1)
+        logp_x1 = Independent(
+            Normal(
+                loc=torch.zeros_like(x1_1d, device=x1_1d.device),
+                scale=torch.ones_like(x1_1d, device=x1_1d.device),
+            ),
+            1,
+        ).log_prob(x1_1d)
+
+        log_likelihood = logp_x1 - logp_x1_minus_logp_x0
+
+        return log_likelihood
 
     def forward(self, *,  
         
